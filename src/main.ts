@@ -13,7 +13,6 @@ async function bootstrap() {
 
   app.enableCors(corsOptions);
 
-  console.log(process.env);
   const port = Number(process.env.PORT) || 8080;
   await app.listen(port);
   console.log(

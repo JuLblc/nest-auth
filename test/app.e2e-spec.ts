@@ -5,8 +5,13 @@ import { AppModule } from "../src/app.module";
 import { AuthDto } from "../src/auth/dto";
 import { PrismaService, PrismaServiceTest } from "../src/prisma/prisma.service";
 import { EditUserDto } from "../src/user/dto";
-import { Tokens } from "src/auth/types/tokens.type";
+import {
+  PasswordResetToken,
+  ResetTokenValidity,
+  Tokens,
+} from "../src/auth/types/tokens.type";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { User } from "@prisma/client";
 
 describe("App e2e", () => {
   let app: INestApplication;
@@ -25,8 +30,8 @@ describe("App e2e", () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
     })
-      .overrideProvider(PrismaService) // Override PrismaService
-      .useClass(PrismaServiceTest) // Use PrismaServiceTest instead
+      .overrideProvider(PrismaService)
+      .useClass(PrismaServiceTest)
       .compile();
 
     app = moduleRef.createNestApplication();
@@ -235,6 +240,7 @@ describe("App e2e", () => {
           .spec()
           .post("/auth/refresh")
           .withBearerToken(tokens.refresh_token);
+
         const newTokens = response.body;
 
         expect(response.statusCode).toEqual(200);
@@ -304,12 +310,76 @@ describe("App e2e", () => {
           .post("/auth/forgot")
           .withBody({ email: forgotDto.email });
 
-        const resetData = response.body;
+        const resetData: PasswordResetToken = response.body;
 
         expect(response.statusCode).toEqual(201);
         expect(resetData.resetToken).toBeTruthy();
         expect(resetData.resetTokenExpiresAt).toBeTruthy();
         expect(resetData.resetMailRecipient).toEqual(forgotDto.email);
+      });
+    });
+    describe("Reset", () => {
+      let user: User;
+      let resetToken: string;
+
+      beforeAll(async () => {
+        user = await prisma.user.findUnique({
+          where: {
+            email: forgotDto.email,
+          },
+        });
+
+        resetToken = user.resetToken;
+      });
+
+      it("should throw if token don't match any user", async () => {
+        const corruptedResetToken = "corruptedResetToken";
+
+        return await pactum
+          .spec()
+          .get(`/auth/reset`)
+          .withQueryParams("resetToken", corruptedResetToken)
+          .expectStatus(400);
+      });
+
+      it("should return user email", async () => {
+        const response = await pactum
+          .spec()
+          .get(`/auth/reset`)
+          .withQueryParams("resetToken", resetToken);
+
+        const checkResetTokenValidityData: ResetTokenValidity = response.body;
+
+        expect(response.statusCode).toEqual(200);
+        expect(checkResetTokenValidityData.email).toEqual(forgotDto.email);
+        expect(checkResetTokenValidityData.isExpired).toEqual(false);
+      });
+
+      it("should return isExpired = true, if the token is expired", async () => {
+        const { resetTokenExpiresAt } = user;
+
+        const expiredResetToken = new Date(resetTokenExpiresAt);
+        expiredResetToken.setDate(resetTokenExpiresAt.getDate() - 1);
+
+        await prisma.user.update({
+          where: {
+            email: forgotDto.email,
+          },
+          data: {
+            resetTokenExpiresAt: expiredResetToken,
+          },
+        });
+
+        const response = await pactum
+          .spec()
+          .get(`/auth/reset`)
+          .withQueryParams("resetToken", resetToken);
+
+        const checkResetTokenValidityData: ResetTokenValidity = response.body;
+
+        expect(response.statusCode).toEqual(200);
+        expect(checkResetTokenValidityData.email).toEqual(undefined);
+        expect(checkResetTokenValidityData.isExpired).toEqual(true);
       });
     });
   });

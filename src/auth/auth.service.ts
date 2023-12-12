@@ -233,7 +233,7 @@ export class AuthService {
       <p>Julien</p>`,
     });
 
-    const resetMailRecipient = sentMessageInfo.accepted[0];
+    const resetMailRecipient: string = sentMessageInfo.accepted[0];
     return resetMailRecipient;
   }
 
@@ -269,11 +269,44 @@ export class AuthService {
       },
     });
 
-    const resetLink = `${this.config.get("URL_SITE")}/auth/reset?${resetToken}`;
+    const resetLink = `${this.config.get(
+      "URL_SITE"
+    )}/auth/reset?resetToken=${resetToken}`;
 
     const resetMailRecipient =
       resetLink && (await this.sendResetEmail(email, resetLink));
 
     return { resetToken, resetTokenExpiresAt, resetMailRecipient };
+  }
+
+  isTokenExpired(resetTokenExpiresAt: Date) {
+    const dateNow = new Date(Date.now());
+    return dateNow > resetTokenExpiresAt;
+  }
+
+  async checkResetTokenValidity(resetToken: string) {
+    const user = await this.prisma.user.findFirst({
+      where: {
+        resetToken,
+      },
+    });
+
+    if (!user) {
+      throw new BadRequestException(`User with ${resetToken} doesn't exist`);
+    }
+
+    const { resetTokenExpiresAt, email } = user;
+    const isExpired = this.isTokenExpired(resetTokenExpiresAt);
+
+    if (isExpired) {
+      return {
+        isExpired,
+      };
+    }
+
+    return {
+      email,
+      isExpired,
+    };
   }
 }
