@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { AuthService } from "./auth.service";
-import { AuthDto, ForgotDto } from "./dto";
+import { AuthDto, ForgotDto, ResetDto } from "./dto";
 import { Tokens, PasswordResetToken, ResetTokenValidity } from "./types";
 import { GetUser, Public } from "./decorator";
 import { RefreshJwtGuard } from "./guard";
@@ -52,7 +52,7 @@ export class AuthController {
   @Public()
   @Post("forgot")
   async forgot(@Body() dto: ForgotDto): Promise<PasswordResetToken> {
-    return this.authService.forgotCredentials(dto.email);
+    return this.authService.handlePasswordResetRequest(dto.email);
   }
 
   @Public()
@@ -61,5 +61,14 @@ export class AuthController {
     @Query("resetToken") resetToken: string
   ): Promise<ResetTokenValidity> {
     return this.authService.checkResetTokenValidity(resetToken);
+  }
+
+  @Public()
+  @Put("reset")
+  async resetPassword(
+    @Query("resetToken") resetToken: string,
+    @Body() dto: ResetDto
+  ) {
+    return this.authService.resetPassword(dto.password, resetToken);
   }
 }

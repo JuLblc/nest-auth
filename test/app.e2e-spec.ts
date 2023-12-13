@@ -321,6 +321,7 @@ describe("App e2e", () => {
     describe("Reset", () => {
       let user: User;
       let resetToken: string;
+      let initialResetTokenExpiresAt: Date;
 
       beforeAll(async () => {
         user = await prisma.user.findUnique({
@@ -330,6 +331,7 @@ describe("App e2e", () => {
         });
 
         resetToken = user.resetToken;
+        initialResetTokenExpiresAt = user.resetTokenExpiresAt;
       });
 
       it("should throw if token don't match any user", async () => {
@@ -342,7 +344,7 @@ describe("App e2e", () => {
           .expectStatus(400);
       });
 
-      it("should return user email", async () => {
+      it("should return user email if token match a user", async () => {
         const response = await pactum
           .spec()
           .get(`/auth/reset`)
@@ -380,6 +382,24 @@ describe("App e2e", () => {
         expect(response.statusCode).toEqual(200);
         expect(checkResetTokenValidityData.email).toEqual(undefined);
         expect(checkResetTokenValidityData.isExpired).toEqual(true);
+      });
+
+      it("should update password", async () => {
+        await prisma.user.update({
+          where: {
+            email: forgotDto.email,
+          },
+          data: {
+            resetTokenExpiresAt: initialResetTokenExpiresAt,
+          },
+        });
+
+        return await pactum
+          .spec()
+          .put("/auth/reset")
+          .withQueryParams("resetToken", resetToken)
+          .withBody({ password: authDto.password })
+          .expectStatus(200);
       });
     });
   });

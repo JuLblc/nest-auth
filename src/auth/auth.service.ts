@@ -9,12 +9,13 @@ import * as argon from "argon2";
 import { JwtService } from "@nestjs/jwt";
 import { ConfigService } from "@nestjs/config";
 import { Prisma } from "@prisma/client";
-import { JwtPayload, Tokens } from "./types";
+import { JwtPayload, PasswordResetToken, Tokens } from "./types";
 import { MailerService } from "@nestjs-modules/mailer";
 
 @Injectable()
 export class AuthService {
   private static readonly TIME_OUT_MS = 60 * 60 * 1000;
+  private static readonly MIN_LENGTH = 8;
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
@@ -22,7 +23,7 @@ export class AuthService {
     private mailerService: MailerService
   ) {}
 
-  async validatePassword({
+  validatePassword({
     password,
     minLength,
     requireUppercase,
@@ -35,7 +36,6 @@ export class AuthService {
     requireLowercase: boolean;
     requireSpecialChar: boolean;
   }) {
-    // Check for minimum password length
     if (password.length < minLength) {
       throw new BadRequestException(
         `The password must have at least ${minLength} characters.`
@@ -101,9 +101,9 @@ export class AuthService {
 
   async signup(dto: AuthDto) {
     try {
-      await this.validatePassword({
+      this.validatePassword({
         password: dto.password,
-        minLength: 8,
+        minLength: AuthService.MIN_LENGTH,
         requireUppercase: true,
         requireLowercase: true,
         requireSpecialChar: true,
@@ -133,7 +133,6 @@ export class AuthService {
   }
 
   async signin(dto: AuthDto) {
-    // find the user by email
     const user = await this.prisma.user.findUnique({
       where: {
         email: dto.email,
@@ -237,7 +236,7 @@ export class AuthService {
     return resetMailRecipient;
   }
 
-  async forgotCredentials(email: string) {
+  async handlePasswordResetRequest(email: string): Promise<PasswordResetToken> {
     const user = await this.prisma.user.findUnique({
       where: {
         email,
@@ -285,7 +284,7 @@ export class AuthService {
   }
 
   async checkResetTokenValidity(resetToken: string) {
-    const user = await this.prisma.user.findFirst({
+    const user = await this.prisma.user.findUnique({
       where: {
         resetToken,
       },
@@ -308,5 +307,33 @@ export class AuthService {
       email,
       isExpired,
     };
+  }
+
+  async resetPassword(password: string, resetToken: string) {
+    try {
+      this.validatePassword({
+        password,
+        minLength: AuthService.MIN_LENGTH,
+        requireUppercase: true,
+        requireLowercase: true,
+        requireSpecialChar: true,
+      });
+
+      const hashedPassword = await argon.hash(password);
+
+      await this.prisma.user.update({
+        where: {
+          resetToken,
+        },
+        data: {
+          hashedPassword,
+          passwordLastUpdatedAt: new Date(),
+          resetToken: null,
+          resetTokenExpiresAt: null,
+        },
+      });
+    } catch (error) {
+      throw error;
+    }
   }
 }
