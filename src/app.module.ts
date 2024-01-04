@@ -5,7 +5,6 @@ import { UserModule } from "./user/user.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { APP_GUARD } from "@nestjs/core";
 import { AccessJwtGuard } from "./auth/guard";
-import { HelloController } from "./hello/hello.controller";
 
 @Module({
   imports: [
@@ -22,6 +21,6 @@ import { HelloController } from "./hello/hello.controller";
       useClass: AccessJwtGuard,
     },
   ],
-  controllers: [HelloController],
+  controllers: [],
 })
 export class AppModule {}
