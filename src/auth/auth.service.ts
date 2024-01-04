@@ -1,7 +1,9 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
+  NotFoundException,
 } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { AuthDto } from "./dto";
@@ -14,8 +16,8 @@ import { MailerService } from "@nestjs-modules/mailer";
 
 @Injectable()
 export class AuthService {
-  private static readonly TIME_OUT_MS = 60 * 60 * 1000;
-  private static readonly MIN_LENGTH = 8;
+  private static readonly TIME_OUT_MS = 10 * 60 * 1000;
+  private static readonly PASSWORD_MIN_LENGTH = 8;
   constructor(
     private prisma: PrismaService,
     private jwt: JwtService,
@@ -103,7 +105,7 @@ export class AuthService {
     try {
       this.validatePassword({
         password: dto.password,
-        minLength: AuthService.MIN_LENGTH,
+        minLength: AuthService.PASSWORD_MIN_LENGTH,
         requireUppercase: true,
         requireLowercase: true,
         requireSpecialChar: true,
@@ -125,70 +127,87 @@ export class AuthService {
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError) {
         if (error.code === "P2002") {
-          throw new ForbiddenException("Credentials taken");
+          throw new ConflictException("Credentials taken");
         }
       }
+      console.error("Error: ", error);
       throw error;
     }
   }
 
   async signin(dto: AuthDto) {
-    const user = await this.prisma.user.findUnique({
-      where: {
-        email: dto.email,
-      },
-    });
-    if (!user) throw new ForbiddenException("Credentials incorrect");
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: {
+          email: dto.email,
+        },
+      });
+      if (!user) throw new NotFoundException(`User ${dto.email} doesn't exist`);
 
-    const passwordMatches = await argon.verify(
-      user.hashedPassword,
-      dto.password
-    );
-    if (!passwordMatches) throw new ForbiddenException("Credentials incorrect");
+      const passwordMatches = await argon.verify(
+        user.hashedPassword,
+        dto.password
+      );
+      if (!passwordMatches)
+        throw new ForbiddenException("Credentials incorrect");
 
-    const tokens = await this.signToken(user.id, user.email);
-    await this.updateRefreshTokenHash(user.id, tokens.refresh_token);
+      const tokens = await this.signToken(user.id, user.email);
+      await this.updateRefreshTokenHash(user.id, tokens.refresh_token);
 
-    return tokens;
+      return tokens;
+    } catch (error) {
+      console.error("Error: ", error);
+      throw error;
+    }
   }
 
   async logout(userId: number): Promise<boolean> {
-    await this.prisma.user.updateMany({
-      where: {
-        id: userId,
-        hashedRefreshToken: {
-          not: null,
+    try {
+      await this.prisma.user.updateMany({
+        where: {
+          id: userId,
+          hashedRefreshToken: {
+            not: null,
+          },
         },
-      },
-      data: {
-        hashedRefreshToken: null,
-      },
-    });
-    return true;
+        data: {
+          hashedRefreshToken: null,
+        },
+      });
+      return true;
+    } catch (error) {
+      console.error("Error: ", error);
+      throw error;
+    }
   }
 
   async refreshTokens(userId: number, refreshToken: string): Promise<Tokens> {
-    const user = await this.prisma.user.findUnique({
-      where: {
-        id: userId,
-      },
-    });
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: {
+          id: userId,
+        },
+      });
 
-    if (!user || !user.hashedRefreshToken)
-      throw new ForbiddenException("Credentials incorrect");
+      if (!user || !user.hashedRefreshToken)
+        throw new ForbiddenException("Credentials incorrect");
 
-    const refreshTokenMatches = await argon.verify(
-      user.hashedRefreshToken,
-      refreshToken
-    );
+      const refreshTokenMatches = await argon.verify(
+        user.hashedRefreshToken,
+        refreshToken
+      );
 
-    if (!refreshTokenMatches)
-      throw new ForbiddenException("Credentials incorrect");
+      if (!refreshTokenMatches)
+        throw new ForbiddenException("Credentials incorrect");
 
-    const tokens = await this.signToken(user.id, user.email);
-    await this.updateRefreshTokenHash(user.id, tokens.refresh_token);
+      const tokens = await this.signToken(user.id, user.email);
+      await this.updateRefreshTokenHash(user.id, tokens.refresh_token);
 
-    return tokens;
+      return tokens;
+    } catch (error) {
+      console.error("Error: ", error);
+      throw error;
+    }
   }
 
   generateToken() {
@@ -237,45 +256,50 @@ export class AuthService {
   }
 
   async handlePasswordResetRequest(email: string): Promise<PasswordResetToken> {
-    const user = await this.prisma.user.findUnique({
-      where: {
-        email,
-      },
-    });
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: {
+          email,
+        },
+      });
 
-    if (!user) {
-      throw new BadRequestException(`User with ${email} doesn't exist`);
+      if (!user) {
+        throw new NotFoundException(`User ${email} doesn't exist`);
+      }
+
+      const passwordLastUpdated = user.passwordLastUpdatedAt;
+
+      if (!this.isTimeBetweenPasswordRequestExceeded(passwordLastUpdated)) {
+        throw new BadRequestException(
+          "Please wait before requesting another password reset"
+        );
+      }
+
+      const { resetToken, resetTokenExpiresAt } =
+        this.generateExpiringResetToken();
+
+      await this.prisma.user.update({
+        where: {
+          email,
+        },
+        data: {
+          resetToken,
+          resetTokenExpiresAt,
+        },
+      });
+
+      const resetLink = `${this.config.get(
+        "URL_SITE"
+      )}/reset-password?resetToken=${resetToken}`;
+
+      const resetMailRecipient =
+        resetLink && (await this.sendResetEmail(email, resetLink));
+
+      return { resetToken, resetTokenExpiresAt, resetMailRecipient };
+    } catch (error) {
+      console.error("Error: ", error);
+      throw error;
     }
-
-    const passwordLastUpdated = user.passwordLastUpdatedAt;
-
-    if (!this.isTimeBetweenPasswordRequestExceeded(passwordLastUpdated)) {
-      throw new BadRequestException(
-        "Please wait before requesting another password reset"
-      );
-    }
-
-    const { resetToken, resetTokenExpiresAt } =
-      this.generateExpiringResetToken();
-
-    await this.prisma.user.update({
-      where: {
-        email,
-      },
-      data: {
-        resetToken,
-        resetTokenExpiresAt,
-      },
-    });
-
-    const resetLink = `${this.config.get(
-      "URL_SITE"
-    )}/auth/reset?resetToken=${resetToken}`;
-
-    const resetMailRecipient =
-      resetLink && (await this.sendResetEmail(email, resetLink));
-
-    return { resetToken, resetTokenExpiresAt, resetMailRecipient };
   }
 
   isTokenExpired(resetTokenExpiresAt: Date) {
@@ -284,36 +308,41 @@ export class AuthService {
   }
 
   async checkResetTokenValidity(resetToken: string) {
-    const user = await this.prisma.user.findUnique({
-      where: {
-        resetToken,
-      },
-    });
+    try {
+      const user = await this.prisma.user.findUnique({
+        where: {
+          resetToken,
+        },
+      });
 
-    if (!user) {
-      throw new BadRequestException(`User with ${resetToken} doesn't exist`);
-    }
+      if (!user) {
+        throw new BadRequestException(`User with ${resetToken} doesn't exist`);
+      }
 
-    const { resetTokenExpiresAt, email } = user;
-    const isExpired = this.isTokenExpired(resetTokenExpiresAt);
+      const { resetTokenExpiresAt, email } = user;
+      const isExpired = this.isTokenExpired(resetTokenExpiresAt);
 
-    if (isExpired) {
+      if (isExpired) {
+        return {
+          isExpired,
+        };
+      }
+
       return {
+        email,
         isExpired,
       };
+    } catch (error) {
+      console.error("Error: ", error);
+      throw error;
     }
-
-    return {
-      email,
-      isExpired,
-    };
   }
 
   async resetPassword(password: string, resetToken: string) {
     try {
       this.validatePassword({
         password,
-        minLength: AuthService.MIN_LENGTH,
+        minLength: AuthService.PASSWORD_MIN_LENGTH,
         requireUppercase: true,
         requireLowercase: true,
         requireSpecialChar: true,
@@ -333,6 +362,7 @@ export class AuthService {
         },
       });
     } catch (error) {
+      console.error("Error: ", error);
       throw error;
     }
   }

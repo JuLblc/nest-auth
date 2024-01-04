@@ -67,6 +67,11 @@ describe("App e2e", () => {
       password: "123Soleil!",
     };
 
+    const wrongEmailDto: AuthDto = {
+      email: "vladgmail.com",
+      password: "123Soleil!",
+    };
+
     const wrongMinLengthDto: AuthDto = {
       email: "vlad@gmail.com",
       password: "123",
@@ -96,6 +101,16 @@ describe("App e2e", () => {
           .post("/auth/signup")
           .withBody({
             password: authDto.password,
+          })
+          .expectStatus(400);
+      });
+      it("should throw if email is not an email", () => {
+        return pactum
+          .spec()
+          .post("/auth/signup")
+          .withBody({
+            email: wrongEmailDto.email,
+            password: wrongEmailDto.password,
           })
           .expectStatus(400);
       });
